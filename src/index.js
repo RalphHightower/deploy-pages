@@ -3,9 +3,10 @@
 // without the user having to do the tar process themselves.
 
 const core = require('@actions/core')
-// const github = require('@actions/github'); // TODO: Not used until we publish API endpoint to the @action/github package
 
-const { Deployment } = require('./deployment')
+const { Deployment } = require('./internal/deployment')
+const getContext = require('./internal/context')
+
 const deployment = new Deployment()
 
 async function cancelHandler(evtOrExitCodeOrError) {
@@ -14,6 +15,8 @@ async function cancelHandler(evtOrExitCodeOrError) {
 }
 
 async function main() {
+  const { isPreview } = getContext()
+
   let idToken = ''
   try {
     idToken = await core.getIDToken()
@@ -22,8 +25,18 @@ async function main() {
     core.setFailed(`Ensure GITHUB_TOKEN has permission "id-token: write".`)
     return
   }
+
   try {
-    await deployment.create(idToken)
+    const deploymentInfo = await deployment.create(idToken)
+
+    // Output the deployed Pages URL
+    let pageUrl = deploymentInfo?.['page_url'] || ''
+    const previewUrl = deploymentInfo?.['preview_url'] || ''
+    if (isPreview && previewUrl) {
+      pageUrl = previewUrl
+    }
+    core.setOutput('page_url', pageUrl)
+
     await deployment.check()
   } catch (error) {
     core.setFailed(error)
@@ -35,9 +48,4 @@ process.on('SIGINT', cancelHandler)
 process.on('SIGTERM', cancelHandler)
 
 // Main
-const emitTelemetry = core.getInput('emit_telemetry')
-if (emitTelemetry === 'true') {
-  // For compatibility, treat the use of this deprecated input as a no-op
-} else {
-  main()
-}
+main()
