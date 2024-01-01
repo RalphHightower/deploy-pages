@@ -3,7 +3,7 @@ const core = require('@actions/core')
 // All variables we need from the runtime are loaded here
 const getContext = require('./context')
 const {
-  getSignedArtifactMetadata,
+  getArtifactMetadata,
   createPagesDeployment,
   getPagesDeploymentStatus,
   cancelPagesDeployment
@@ -17,7 +17,7 @@ const temporaryErrorStatus = {
 
 const finalErrorStatus = {
   deployment_failed: 'Deployment failed, try again later.',
-  deployment_perms_error: 'Deployment failed, Please ensure that the file permissions are correct.',
+  deployment_perms_error: 'Deployment failed. Please ensure that the file permissions are correct.',
   deployment_content_failed:
     'Artifact could not be deployed. Please ensure the content does not contain any hard links, symlinks and total size is less than 10GB.',
   deployment_cancelled: 'Deployment cancelled.',
@@ -31,9 +31,7 @@ const SIZE_LIMIT_DESCRIPTION = '1 GB'
 class Deployment {
   constructor() {
     const context = getContext()
-    this.runTimeUrl = context.runTimeUrl
     this.repositoryNwo = context.repositoryNwo
-    this.runTimeToken = context.runTimeToken
     this.buildVersion = context.buildVersion
     this.buildActor = context.buildActor
     this.actionsId = context.actionsId
@@ -48,8 +46,8 @@ class Deployment {
     this.startTime = null
   }
 
-  // Ask the runtime for the unsigned artifact URL and deploy to GitHub Pages
-  // by creating a deployment with that artifact
+  // Call GitHub api to fetch artifacts matching the provided name and deploy to GitHub Pages
+  // by creating a deployment with that artifact id
   async create(idToken) {
     if (Number(core.getInput('timeout')) > MAX_TIMEOUT) {
       core.warning(
@@ -65,11 +63,7 @@ class Deployment {
       core.debug(`Action ID: ${this.actionsId}`)
       core.debug(`Actions Workflow Run ID: ${this.workflowRun}`)
 
-      const artifactData = await getSignedArtifactMetadata({
-        runtimeToken: this.runTimeToken,
-        workflowRunId: this.workflowRun,
-        artifactName: this.artifactName
-      })
+      const artifactData = await getArtifactMetadata({ artifactName: this.artifactName })
 
       if (artifactData?.size > ONE_GIGABYTE) {
         core.warning(
@@ -79,7 +73,7 @@ class Deployment {
 
       const deployment = await createPagesDeployment({
         githubToken: this.githubToken,
-        artifactUrl: artifactData.url,
+        artifactId: artifactData.id,
         buildVersion: this.buildVersion,
         idToken,
         isPreview: this.isPreview
@@ -104,14 +98,14 @@ class Deployment {
 
       // build customized error message based on server response
       if (error.response) {
-        let errorMessage = `Failed to create deployment (status: ${error.status}) with build version ${this.buildVersion}. `
+        let errorMessage = `Failed to create deployment (status: ${error.status}) with build version ${this.buildVersion}.`
         if (error.status === 400) {
-          errorMessage += `Responded with: ${error.message}`
+          errorMessage += ` Responded with: ${error.message}`
         } else if (error.status === 403) {
-          errorMessage += 'Ensure GITHUB_TOKEN has permission "pages: write".'
+          errorMessage += ' Ensure GITHUB_TOKEN has permission "pages: write".'
         } else if (error.status === 404) {
           const pagesSettingsUrl = `${this.githubServerUrl}/${this.repositoryNwo}/settings/pages`
-          errorMessage += `Ensure GitHub Pages has been enabled: ${pagesSettingsUrl}`
+          errorMessage += ` Ensure GitHub Pages has been enabled: ${pagesSettingsUrl}`
           // If using GHES, add a special note about compatibility
           if (new URL(this.githubServerUrl).hostname.toLowerCase() !== 'github.com') {
             errorMessage +=
@@ -119,7 +113,7 @@ class Deployment {
           }
         } else if (error.status >= 500) {
           errorMessage +=
-            'Server error, is githubstatus.com reporting a Pages outage? Please re-run the deployment at a later time.'
+            ' Server error, is githubstatus.com reporting a Pages outage? Please re-run the deployment at a later time.'
         }
         throw new Error(errorMessage)
       } else {

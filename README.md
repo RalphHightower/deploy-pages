@@ -6,11 +6,11 @@ This action is used to deploy [Actions artifacts][artifacts] to [GitHub Pages](h
 
 ## Usage
 
-See [action.yml](action.yml) for the various `inputs` this action supports.
+See [action.yml](action.yml) for the various `inputs` this action supports (or [below](#inputs-📥)).
 
 For examples that make use of this action, check out our [starter-workflows][starter-workflows] in a variety of frameworks.
 
-This action expects an artifact named `github-pages` to have been created prior to execution. This is done automatically when using [`actions/upload-pages-artifact`][upload-pages-artifact].
+This action deploys a Pages site previously uploaded as an artifact (e.g. using [`actions/upload-pages-artifact`][upload-pages-artifact]).
 
 We recommend this action to be used in a dedicated job:
 
@@ -41,7 +41,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2 # or the latest "vX.X.X" version tag for this action
+        uses: actions/deploy-pages@v4 # or specific "vX.X.X" version tag for this action
 ```
 
 ### Inputs 📥
@@ -51,7 +51,7 @@ jobs:
 | `token` | `true` | `${{ github.token }}` | The GitHub token used to create an authenticated client - Provided for you by default! |
 | `timeout` | `false` | `"600000"` | Time in milliseconds after which to timeout and cancel the deployment (default: 10 minutes) |
 | `error_count` | `false` | `"10"` | Maximum number of status report errors before cancelling a deployment (default: 10) |
-| `reporting_interval` | `false` | `"5000"` | Time in milliseconds between two deployment status report (default: 5 seconds) |
+| `reporting_interval` | `false` | `"5000"` | Time in milliseconds between two deployment status reports (default: 5 seconds) |
 | `artifact_name` | `false` | `"github-pages"` | The name of the artifact to deploy |
 | `preview` | `false` | `"false"` | Is this attempting to deploy a pull request as a GitHub Pages preview site? (NOTE: This feature is only in alpha currently and is not available to the public!) |
 
@@ -71,7 +71,7 @@ jobs:
 
 There are a few important considerations to be aware of:
 
-1. The artifact being deployed must have been uploaded in a previous step, either in the same job or a separate job that doesn't execute until the upload is complete.
+1. The artifact being deployed must have been uploaded in a previous step, either in the same job or a separate job that doesn't execute until the upload is complete. See [`actions/upload-pages-artifact`][upload-pages-artifact] for more information about the format of the artifact we expect.
 
 2. The job that executes the deployment must at minimum have the following permissions:
    - `pages: write`
@@ -85,10 +85,13 @@ There are a few important considerations to be aware of:
 
 ## Compatibility
 
-This action is primarily design for use with GitHub.com's Actions workflows and Pages deployments. However, certain releases should also be compatible with GitHub Enterprise Server (GHES) `3.7` and above.
+This action is primarily designed for use with GitHub.com's Actions workflows and Pages deployments. However, certain releases should also be compatible with GitHub Enterprise Server (GHES) `3.7` and above.
 
 | Release | GHES Compatibility |
 |:---|:---|
+| [`v4`](https://github.com/actions/deploy-pages/releases/tag/v4) | :warning: Incompatible at this time |
+| [`v3`](https://github.com/actions/deploy-pages/releases/tag/v3) | `>= 3.9` |
+| `v3.x.x` | `>= 3.9` |
 | [`v2`](https://github.com/actions/deploy-pages/releases/tag/v2) | `>= 3.9` |
 | `v2.x.x` | `>= 3.9` |
 | [`v1`](https://github.com/actions/deploy-pages/releases/tag/v1) | `>= 3.7` |
@@ -105,7 +108,7 @@ In order to release a new version of this Action:
 
 2. Publish the draft release from the `main` branch with semantic version as the tag name, _with_ the checkbox to publish to the GitHub Marketplace checked. :ballot_box_with_check:
 
-3. After publishing the release, the [`release` workflow][release] will automatically run to create/update the corresponding the major version tag such as `v1`.
+3. After publishing the release, the [`release` workflow][release] will automatically run to create/update the corresponding major version tag such as `v1`.
 
    ⚠️ Environment approval is required. Check the [Release workflow run list][release-workflow-runs].
 

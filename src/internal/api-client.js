@@ -1,119 +1,118 @@
 const core = require('@actions/core')
 const github = require('@actions/github')
-const hc = require('@actions/http-client')
+const { DefaultArtifactClient } = require('@actions/artifact')
 const { RequestError } = require('@octokit/request-error')
 const HttpStatusMessages = require('http-status-messages')
 
-// All variables we need from the runtime are loaded here
-const getContext = require('./context')
-
-async function processRuntimeResponse(res, requestOptions) {
-  // Parse the response body as JSON
-  let obj = null
-  try {
-    const contents = await res.readBody()
-    if (contents && contents.length > 0) {
-      obj = JSON.parse(contents)
-    }
-  } catch (error) {
-    // Invalid resource (contents not json); leaving resulting obj as null
-  }
-
+function wrapTwirpResponseLikeOctokit(twirpResponse, requestOptions) {
   // Specific response shape aligned with Octokit
   const response = {
-    url: res.message?.url || requestOptions.url,
-    status: res.message?.statusCode || 0,
+    url: requestOptions.url,
+    status: 200,
     headers: {
-      ...res.message?.headers
+      ...requestOptions.headers
     },
-    data: obj
+    data: twirpResponse
   }
-
-  // Forcibly throw errors for negative HTTP status codes!
-  // @actions/http-client doesn't do this by default.
-  // Mimic the errors thrown by Octokit for consistency.
-  if (response.status >= 400) {
-    // Try to get an error message from the response body
-    const errorMsg =
-      (typeof response.data === 'string' && response.data) ||
-      response.data?.error ||
-      response.data?.message ||
-      // Try the Node HTTP IncomingMessage's statusMessage property
-      res.message?.statusMessage ||
-      // Fallback to the HTTP status message based on the status code
-      HttpStatusMessages[response.status] ||
-      // Or if the status code is unexpected...
-      `Unknown error (${response.status})`
-
-    throw new RequestError(errorMsg, response.status, {
-      response,
-      request: requestOptions
-    })
-  }
-
   return response
 }
 
-async function getSignedArtifactMetadata({ runtimeToken, workflowRunId, artifactName }) {
-  const { runTimeUrl: RUNTIME_URL } = getContext()
-  const artifactExchangeUrl = `${RUNTIME_URL}_apis/pipelines/workflows/${workflowRunId}/artifacts?api-version=6.0-preview`
+// Mimic the errors thrown by Octokit for consistency.
+function wrapTwirpErrorLikeOctokit(twirpError, requestOptions) {
+  const rawErrorMsg = twirpError?.message || twirpError?.toString() || ''
+  const statusCodeMatch = rawErrorMsg.match(/Failed request: \((?<statusCode>\d+)\)/)
+  const statusCode = statusCodeMatch?.groups?.statusCode ?? 500
 
-  const httpClient = new hc.HttpClient()
-  let data = null
+  // Try to provide the best error message
+  const errorMsg =
+    rawErrorMsg ||
+    // Fallback to the HTTP status message based on the status code
+    HttpStatusMessages[statusCode] ||
+    // Or if the status code is unexpected...
+    `Unknown error (${statusCode})`
+
+  // RequestError is an Octokit-specific class
+  return new RequestError(errorMsg, statusCode, {
+    response: {
+      url: requestOptions.url,
+      status: statusCode,
+      headers: {
+        ...requestOptions.headers
+      },
+      data: rawErrorMsg ? { message: rawErrorMsg } : ''
+    },
+    request: requestOptions
+  })
+}
+
+function getArtifactsServiceOrigin() {
+  const resultsUrl = process.env.ACTIONS_RESULTS_URL
+  return resultsUrl ? new URL(resultsUrl).origin : ''
+}
+
+async function getArtifactMetadata({ artifactName }) {
+  const artifactClient = new DefaultArtifactClient()
+
+  // Primarily for debugging purposes, accuracy is not critical
+  const requestOptions = {
+    method: 'POST',
+    url: `${getArtifactsServiceOrigin()}/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts`,
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: {}
+  }
 
   try {
-    const requestHeaders = {
-      accept: 'application/json',
-      authorization: `Bearer ${runtimeToken}`
+    core.info(`Fetching artifact metadata for "${artifactName}" in this workflow run`)
+
+    let response
+    try {
+      const twirpResponse = await artifactClient.listArtifacts()
+      response = wrapTwirpResponseLikeOctokit(twirpResponse, requestOptions)
+    } catch (twirpError) {
+      core.error('Listing artifact metadata failed', twirpError)
+      const octokitError = wrapTwirpErrorLikeOctokit(twirpError, requestOptions)
+      throw octokitError
     }
-    const requestOptions = {
-      method: 'GET',
-      url: artifactExchangeUrl,
-      headers: {
-        ...requestHeaders
-      },
-      body: null
+
+    const filteredArtifacts = response.data.artifacts.filter(artifact => artifact.name === artifactName)
+
+    const artifactCount = filteredArtifacts.length
+    core.debug(`List artifact count: ${artifactCount}`)
+
+    if (artifactCount === 0) {
+      throw new Error(
+        `No artifacts named "${artifactName}" were found for this workflow run. Ensure artifacts are uploaded with actions/artifact@v4 or later.`
+      )
+    } else if (artifactCount > 1) {
+      throw new Error(
+        `Multiple artifacts named "${artifactName}" were unexpectedly found for this workflow run. Artifact count is ${artifactCount}.`
+      )
     }
 
-    core.info(`Artifact exchange URL: ${artifactExchangeUrl}`)
-    const res = await httpClient.get(artifactExchangeUrl, requestHeaders)
+    const artifact = filteredArtifacts[0]
+    core.debug(`Artifact: ${JSON.stringify(artifact)}`)
 
-    // May throw a RequestError (HttpError)
-    const response = await processRuntimeResponse(res, requestOptions)
+    if (!artifact.size) {
+      core.warning('Artifact size was not found. Unable to verify if artifact size exceeds the allowed size.')
+    }
 
-    data = response.data
-    core.debug(JSON.stringify(data))
+    return artifact
   } catch (error) {
-    core.error('Getting signed artifact URL failed', error)
-    throw error
-  }
-
-  const artifact = data?.value?.find(artifact => artifact.name === artifactName)
-  const artifactRawUrl = artifact?.url
-  if (!artifactRawUrl) {
-    throw new Error(
-      'No uploaded artifact was found! Please check if there are any errors at build step, or uploaded artifact name is correct.'
+    core.error(
+      'Fetching artifact metadata failed. Is githubstatus.com reporting issues with API requests, Pages, or Actions? Please re-run the deployment at a later time.',
+      error
     )
-  }
-
-  const signedArtifactUrl = `${artifactRawUrl}&%24expand=SignedContent`
-
-  const artifactSize = artifact?.size
-  if (!artifactSize) {
-    core.warning('Artifact size was not found. Unable to verify if artifact size exceeds the allowed size.')
-  }
-
-  return {
-    url: signedArtifactUrl,
-    size: artifactSize
+    throw error
   }
 }
 
-async function createPagesDeployment({ githubToken, artifactUrl, buildVersion, idToken, isPreview = false }) {
+async function createPagesDeployment({ githubToken, artifactId, buildVersion, idToken, isPreview = false }) {
   const octokit = github.getOctokit(githubToken)
 
   const payload = {
-    artifact_url: artifactUrl,
+    artifact_id: artifactId,
     pages_build_version: buildVersion,
     oidc_token: idToken
   }
@@ -173,7 +172,7 @@ async function cancelPagesDeployment({ githubToken, deploymentId }) {
 }
 
 module.exports = {
-  getSignedArtifactMetadata,
+  getArtifactMetadata,
   createPagesDeployment,
   getPagesDeploymentStatus,
   cancelPagesDeployment
